@@ -43,7 +43,7 @@ impl Auth {
     }
 
     fn hash_password(password: &str) -> Result<String, String> {
-        let salt = SaltString::generate(&mut OsRng); // ⚠️ Generates a random salt
+        let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
 
         argon2

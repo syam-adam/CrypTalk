@@ -36,6 +36,12 @@ pub fn decrypt_msg(data: &[u8]) -> Option<String> {
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
+fn is_encryption_debug_mode() -> bool {
+    std::env::var("DEBUG_ENCRYPTED")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+}
+
 fn should_log() -> bool {
     env::var("SERVER_LOGGING")
         .map(|val| val == "true")
@@ -130,7 +136,7 @@ async fn handle_client(
                     username
                 );
                 clients.lock().await.remove(&username);
-                return; // exit handler early
+                return; 
             }
         }
         buffer.clear();
@@ -160,7 +166,6 @@ async fn handle_client(
             username
         );
         let welcome_msg = welcome_string.as_bytes();
-        // Success
         writer.lock().await.write_all(welcome_msg).await.unwrap();
 
         break;
@@ -177,17 +182,19 @@ async fn handle_client(
     // 2. Now handle encrypted chat commands
     let mut reader_lines = reader.lines();
     while let Ok(Some(line)) = reader_lines.next_line().await {
-        // decrypt message or use plaintext if failed
         let decrypted = match STANDARD.decode(&line) {
             Ok(bytes) => decrypt_msg(&bytes),
             Err(_) => None,
         };
         let trimmed = decrypted.unwrap_or_else(|| line.clone()).trim().to_string();
+        
+        if is_encryption_debug_mode() {
+            println!("[server][encrypted base64 from {}]: {}", username, line);
+        }
 
         if should_log() {
             log_message(&format!("[{}] {}", username, trimmed));
         }
-        // commands without leading slash:
         if trimmed.starts_with("msg ") {
             let parts: Vec<&str> = trimmed[4..].splitn(2, ' ').collect();
             if parts.len() != 2 {
@@ -203,7 +210,6 @@ async fn handle_client(
             let message = parts[1];
             let msg = format!("[{} -> you]: {}", username, message);
             if send_to_user(to_user, &encrypt_msg(&msg), &clients).await {
-                // ✅ Let sender know it was sent
                 send_to_user(
                     &username,
                     &encrypt_msg(&format!("✅ Message sent to {}", to_user)),
@@ -275,6 +281,9 @@ async fn send_to_user(
     msg: &str,
     clients: &Arc<Mutex<HashMap<String, Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>>>>,
 ) -> bool {
+    if is_encryption_debug_mode() {
+        println!("[server][sending encrypted base64 to {}]: {}", username, msg);
+    }
     if let Some(writer_arc) = clients.lock().await.get(username) {
         let mut writer = writer_arc.lock().await;
         let _ = writer.write_all(format!("{}\n", msg).as_bytes()).await;
@@ -290,6 +299,9 @@ async fn broadcast_message(
     msg: &str,
     clients: &Arc<Mutex<HashMap<String, Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>>>>,
 ) {
+    if is_encryption_debug_mode() {
+        println!("[server][broadcasting encrypted base64 from {}]: {}", from_user, msg);
+    }
     let clients_guard = clients.lock().await;
     for (user, writer_arc) in clients_guard.iter() {
         if user != from_user {

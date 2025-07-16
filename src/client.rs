@@ -30,12 +30,18 @@ pub fn decrypt_msg(data: &[u8]) -> String {
     String::from_utf8(decrypted).expect("invalid UTF-8")
 }
 
+fn is_encryption_debug_mode() -> bool {
+    std::env::var("DEBUG_ENCRYPTED")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+}
+
 fn log_to_file(username: &str, line: &str) {
     if !std::env::var("CLIENT_CHAT_LOGGING")
         .map(|val| val.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
     {
-        return; // Logging disabled ✅
+        return;
     }
 
     let file_path = format!("{}_chat_log.txt", username);
@@ -87,7 +93,6 @@ pub async fn run_client_once() -> bool {
     let mut server_response = String::new();
     let mut username = String::new();
 
-    // === LOGIN / SIGNUP ===
     loop {
         server_response.clear();
         if server_reader.read_line(&mut server_response).await.unwrap() == 0 {
@@ -117,16 +122,18 @@ pub async fn run_client_once() -> bool {
         server_writer.flush().await.unwrap();
     }
 
-    // === SPAWN SERVER READER TASK ===
     let mut server_lines = server_reader.lines();
     let uname_clone = username.clone();
     let read_handle = tokio::spawn(async move {
         while let Ok(Some(line)) = server_lines.next_line().await {
+            if is_encryption_debug_mode() {
+                println!("[client] encrypted base64 from server {}", &line);
+            }
+
             let plain = match STANDARD.decode(&line) {
                 Ok(bytes) => decrypt_msg(&bytes),
-                Err(_) => line.clone(), // fallback
+                Err(_) => line.clone(), 
             };
-
             let timestamped = format!("{} {}", timestamp(), plain);
             let emoji_line = enrich_with_emojis(&timestamped);
 
@@ -145,7 +152,6 @@ pub async fn run_client_once() -> bool {
         }
     });
 
-    // === MAIN USER INPUT LOOP ===
     loop {
         print!("=> ");
         io::stdout().flush().unwrap();
@@ -169,7 +175,9 @@ pub async fn run_client_once() -> bool {
 
         let encrypted = encrypt_msg(trimmed);
         let b64 = STANDARD.encode(&encrypted);
-
+        if is_encryption_debug_mode() {
+            println!("[client] encrypted base64 to server {}", &b64);
+        }
         if server_writer
             .write_all(format!("{}\n", b64).as_bytes())
             .await
@@ -183,7 +191,6 @@ pub async fn run_client_once() -> bool {
 
     let _ = read_handle.await;
 
-    // === RECONNECT PROMPT ===
     loop {
         print!("🔄 Do you want to login again? (y/n): ");
         io::stdout().flush().unwrap();
